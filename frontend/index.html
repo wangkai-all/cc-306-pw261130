@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>点态留存分析 · 双时态身份队列</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="topbar">
+  <div>
+    <h1>点态留存分析</h1>
+    <p class="subtitle">双时态身份队列 · 当时已知 vs 当前修正 · 全部为虚构合成数据，不进行真实用户识别</p>
+  </div>
+  <div class="top-controls">
+    <label>队列口径
+      <select id="basis-select">
+        <option value="entity">稳定实体（身份图连通分量）</option>
+        <option value="account">注册账号（仅含账号实体）</option>
+        <option value="visit">访问身份（节点级，不做跨端合并）</option>
+      </select>
+    </label>
+    <label>报告版本
+      <select id="version-select"></select>
+    </label>
+    <button id="btn-latest" class="ghost">回到最新版本</button>
+    <button id="btn-snapshot" class="ghost">保存当前快照</button>
+    <span id="version-badge" class="badge"></span>
+  </div>
+</header>
+
+<main>
+  <!-- 口径说明与总览 -->
+  <section class="card" id="overview-card">
+    <div class="card-head">
+      <h2>口径与总览</h2>
+      <span id="basis-note" class="note"></span>
+    </div>
+    <div class="stat-grid" id="stat-grid"></div>
+  </section>
+
+  <!-- 留存矩阵 -->
+  <section class="card">
+    <div class="card-head">
+      <h2>留存矩阵（点击单元格钻取人群差异）</h2>
+      <div>
+        <button id="btn-export-matrix" class="ghost">导出矩阵 CSV</button>
+      </div>
+    </div>
+    <div class="legend">
+      <span><i class="swatch swatch-active"></i>确认活跃（下界）</span>
+      <span><i class="swatch swatch-uncertain"></i>含不确定事件（区间上界 &gt; 下界）</span>
+      <span>单元格格式：确认活跃/队列人数（区间留存率）</span>
+    </div>
+    <div class="table-wrap">
+      <table id="matrix-table"></table>
+    </div>
+  </section>
+
+  <!-- 不确定事件 -->
+  <section class="card">
+    <div class="card-head">
+      <h2>不确定事件（拆分后无法唯一归属的历史事件）</h2>
+      <span class="note">拆分只关闭身份边、不删除节点；无 emitter 且挂载在多个如今已分开的实体上的历史事件明确保留为不确定，不强行分摊。</span>
+    </div>
+    <div class="table-wrap">
+      <table id="uncertain-table"></table>
+    </div>
+  </section>
+
+  <!-- 版本时间线 -->
+  <section class="card">
+    <div class="card-head">
+      <h2>版本时间线（身份裁决 / 事件回补 / 重算）</h2>
+      <div>
+        <select id="diff-old"></select>
+        <span>→</span>
+        <select id="diff-new"></select>
+        <button id="btn-diff" class="ghost">对比两个版本</button>
+      </div>
+    </div>
+    <div id="diff-panel" class="diff-panel hidden"></div>
+    <div class="table-wrap">
+      <table id="versions-table"></table>
+    </div>
+  </section>
+
+  <!-- 后台重算 -->
+  <section class="card">
+    <div class="card-head">
+      <h2>后台重算（启动即钉版本，队列与分母同版）</h2>
+      <button id="btn-recompute" class="primary">启动重算任务</button>
+    </div>
+    <div class="table-wrap">
+      <table id="jobs-table"></table>
+    </div>
+    <h3>已保存报告快照</h3>
+    <div class="table-wrap">
+      <table id="snapshots-table"></table>
+    </div>
+  </section>
+
+  <!-- 操作：回补 / 合并 / 撤销 -->
+  <section class="card">
+    <div class="card-head"><h2>操作区（每个操作追加一个新版本，历史报告不变）</h2></div>
+    <div class="op-grid">
+      <form id="form-event" class="op-form">
+        <h3>回补活动事件（可迟到）</h3>
+        <input name="event_id" placeholder="事件ID，如 evt_manual_1" required>
+        <input name="event_time" placeholder="发生时间 UTC，如 2026-09-10T08:00:00Z" required>
+        <input name="emitter_id" placeholder="发射节点ID（可留空=无emitter回补）">
+        <select name="emitter_kind">
+          <option value="">节点类型（新建时必选）</option>
+          <option value="device">device</option>
+          <option value="anonymous">anonymous</option>
+          <option value="account">account</option>
+        </select>
+        <input name="attached_ids" placeholder="挂载节点ID，逗号分隔，如 dev_4,anon_9">
+        <select name="event_type">
+          <option>page_view</option><option>click</option><option>add_to_cart</option>
+          <option>checkout</option><option>search</option><option>server_side_touch</option>
+        </select>
+        <button class="primary">回补事件</button>
+      </form>
+      <form id="form-merge" class="op-form">
+        <h3>身份合并</h3>
+        <input name="a" placeholder="节点ID A，如 dev_5" required>
+        <input name="b" placeholder="节点ID B，如 acc_1" required>
+        <input name="reason" placeholder="裁决理由，如 登录态匹配">
+        <button class="primary">执行合并</button>
+      </form>
+      <form id="form-split" class="op-form">
+        <h3>撤销合并（拆分）</h3>
+        <input name="a" placeholder="节点ID A，如 dev_4" required>
+        <input name="b" placeholder="节点ID B，如 anon_9" required>
+        <input name="reason" placeholder="撤销理由，如 人工复核误判">
+        <button class="danger">撤销合并</button>
+      </form>
+    </div>
+    <p id="op-result" class="op-result"></p>
+  </section>
+</main>
+
+<!-- 钻取弹窗 -->
+<div id="modal" class="modal hidden">
+  <div class="modal-body">
+    <div class="modal-head">
+      <h2 id="modal-title">单元格钻取</h2>
+      <div>
+        <button id="btn-export-drill" class="ghost">导出钻取 CSV</button>
+        <button id="btn-close-modal" class="ghost">关闭</button>
+      </div>
+    </div>
+    <div id="modal-content"></div>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+<script src="app.js"></script>
+</body>
+</html>
